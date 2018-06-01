@@ -17,6 +17,7 @@ using System.Windows.Navigation;
 using System.Windows.Shapes;
 using Tweetinvi;
 using Tweetinvi.Models;
+using Tweetinvi.Models.DTO;
 using Tweetinvi.Models.Entities;
 
 namespace TwitterPicFrame
@@ -41,6 +42,7 @@ namespace TwitterPicFrame
 
         public MainWindow()
         {
+            DataContext = this;
             InitializeComponent();
 
             TwitterAuthenticated = LoginTwitter();
@@ -73,63 +75,62 @@ namespace TwitterPicFrame
             if (!TwitterAuthenticated)
                 return;
 
-            //new Thread(() =>
-            //{
-                List<String> FilterStrings = Settings.GetValueFromConfig("Stream_FilterTrack").Split('|').ToList();
+            List<String> FilterStrings = Settings.GetValueFromConfig("Stream_FilterTrack").Split(',').ToList();
 
-                Filteredstream = Stream.CreateFilteredStream();
+            Filteredstream = Stream.CreateFilteredStream();
 
-                foreach (String filter in FilterStrings)
-                    Filteredstream.AddTrack(filter);
+            foreach (String filter in FilterStrings)
+                Filteredstream.AddTrack(filter);
 
-                Filteredstream.MatchingTweetReceived += (sender2, args) =>
+            Console.WriteLine("Filter tracks: " + String.Join("||", FilterStrings));
+
+            Filteredstream.MatchingTweetReceived += (sender2, args) =>
+            {
+                ITweet tw = args.Tweet;
+
+                Console.WriteLine("A tweet containing has been found");
+
+                if (tw.RetweetedTweet != null)
                 {
-                    ITweet tw = args.Tweet;
+                    tw = tw.RetweetedTweet;
+                    Console.WriteLine("Extracting main Tweet rather than RT");
+                }
 
-                    Console.WriteLine("A tweet containing has been found");
+                Console.WriteLine("The tweet is " + tw.FullText);
 
-                    if (tw.RetweetedTweet != null)
+                TextURL = tw.Url;
+
+                List<IMediaEntity> Medias = tw.Media;
+                if (Medias != null && Medias.Count > 0)
+                {
+                    Application.Current.Dispatcher.Invoke((Action)delegate
                     {
-                        tw = tw.RetweetedTweet;
-                        Console.WriteLine("Extracting main Tweet rather than RT");
-                    }
+                        IMediaEntity m = Medias[random.Next(Medias.Count)];
+                        if (m.MediaURL.Contains(".jpg"))
+                            ImageFromTweet = new BitmapImage(new Uri(m.MediaURL));
+                    });
+                }
+            };
 
-                    Console.WriteLine("The tweet is '" + tw.FullText);
+            Filteredstream.StreamStarted += (sender2, args) =>
+            {
+                Console.WriteLine("Stream started");
+            };
 
-                    TextURL = tw.Url;
+            Filteredstream.StreamStopped += (sender2, args) =>
+            {
+                Console.WriteLine(args.Exception);
+                Console.WriteLine(args.DisconnectMessage);
 
-                    List<IMediaEntity> Medias = tw.Media;
-                    if (Medias != null && Medias.Count > 0)
-                    {
-                        Application.Current.Dispatcher.Invoke((Action)delegate
-                        {
-                            IMediaEntity m = Medias[random.Next(Medias.Count)];
-                            if (m.MediaURL.Contains(".jpg"))
-                                ImageFromTweet = new BitmapImage(new Uri(m.MediaURL));
-                        });
-                    }
-                };
+                timer.Stop();
+                timer.Enabled = false;
+            };
 
-                Filteredstream.StreamStarted += (sender2, args) =>
-                {
-                    Console.WriteLine("Stream started");
-                };
+            timer.Elapsed += new ElapsedEventHandler(OnTimedEvent);
+            timer.Interval = 10000;
+            timer.Enabled = true;
 
-                Filteredstream.StreamStopped += (sender2, args) =>
-                {
-                    Console.WriteLine(args.Exception);
-                    Console.WriteLine(args.DisconnectMessage);
-
-                    timer.Stop();
-                    timer.Enabled = false;
-                };
-
-                timer.Elapsed += new ElapsedEventHandler(OnTimedEvent);
-                timer.Interval = 10000;
-                timer.Enabled = true;
-
-                Task T = Filteredstream.StartStreamMatchingAllConditionsAsync();
-            //}).Start();
+            Task T = Filteredstream.StartStreamMatchingAnyConditionAsync();
         }
 
         private void OnTimedEvent(object sender, ElapsedEventArgs e)
@@ -146,4 +147,6 @@ namespace TwitterPicFrame
         }
         #endregion
     }
+    
+
 }
