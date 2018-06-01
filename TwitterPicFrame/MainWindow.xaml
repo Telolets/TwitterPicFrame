@@ -5,8 +5,14 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:TwitterPicFrame"
         mc:Ignorable="d"
-        Title="MainWindow" Height="350" Width="525">
+        Closed="Window_Closed"
+        Title="MainWindow" Height="500" Width="450">
     <Grid>
-        
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="20*"/>
+        </Grid.RowDefinitions>
+        <TextBlock Grid.Row="0" Text="{Binding TextURL}" HorizontalAlignment="Left" VerticalAlignment="Center"></TextBlock>
+        <Image Grid.Row="1" Source="{Binding ImageFromTweet}" />
     </Grid>
 </Window>
