@@ -1,4 +1,8 @@
-﻿using System;
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
+using MongoDB.Bson.Serialization.IdGenerators;
+using MongoDB.Driver;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -30,6 +34,10 @@ namespace TwitterPicFrame
         private bool TwitterAuthenticated = false;
         private bool MongoDBAuthenticated = false;
 
+        MongoClient client;
+        IMongoDatabase database;
+        IMongoCollection<TweetInfo> TweetCollection;
+
         public BitmapImage _ImageFromTweet;
         public BitmapImage ImageFromTweet { get { return _ImageFromTweet; } set { _ImageFromTweet = value; OnPropertyChanged("ImageFromTweet"); } }
 
@@ -59,7 +67,20 @@ namespace TwitterPicFrame
 
         private bool LoginMongoDB()
         {
-            return false;
+            try
+            {
+                MongoClient client = new MongoClient(Settings.GetValueFromConfig("MongoDB_Address"));
+                database = client.GetDatabase(Settings.GetValueFromConfig("MongoDB_Database"));
+
+                if (client == null)
+                    return false;
+            }
+            catch(Exception e)
+            {
+                Console.WriteLine(e);
+                return false;
+            }
+            return true;
         }
 
         private bool LoginTwitter()
@@ -109,6 +130,8 @@ namespace TwitterPicFrame
                         if (m.MediaURL.Contains(".jpg"))
                             ImageFromTweet = new BitmapImage(new Uri(m.MediaURL));
                     });
+
+                    SaveNewTweetToMongo(tw);
                 }
             };
 
@@ -133,6 +156,36 @@ namespace TwitterPicFrame
             Task T = Filteredstream.StartStreamMatchingAnyConditionAsync();
         }
 
+        private void SaveNewTweetToMongo(ITweet tw)
+        {
+            if (!MongoDBAuthenticated)
+                return;
+
+            TweetCollection = database.GetCollection<TweetInfo>(Settings.GetValueFromConfig("MongoDB_Collection"));
+
+            if (!isTweetSaved(tw.IdStr))
+            {
+                TweetInfo ti = new TweetInfo();
+                ti.ID = tw.IdStr;
+                ti.Name = tw.CreatedBy.Name;
+                ti.ScreenName = tw.CreatedBy.ScreenName;
+                ti.MainTweet = tw;
+
+                TweetCollection.InsertOne(ti);
+            }
+        }
+
+        private bool isTweetSaved(String id)
+        {
+            IMongoCollection<BsonDocument> BsonCollection = database.GetCollection<BsonDocument>(Settings.GetValueFromConfig("MongoDB_Collection"));
+            BsonDocument filter = new BsonDocument(new BsonElement("_id", id));
+
+            if (BsonCollection.Find(filter).Count() > 0)
+                return true;
+            else
+                return false;
+        }
+
         private void OnTimedEvent(object sender, ElapsedEventArgs e)
         {
             if (Filteredstream != null)
@@ -148,5 +201,27 @@ namespace TwitterPicFrame
         #endregion
     }
     
+    [BsonIgnoreExtraElements]
+    public class TweetInfo
+    {
+        [BsonId]
+        public String ID { get; set; }
+        [BsonElement("name")]
+        public String Name { get; set; }
+        [BsonElement("screen_name")]
+        public String ScreenName { get; set; }
 
+        [BsonElement("raw_tweet")]
+        public String MainTweetJson {
+            get {
+                return MainTweet.ToJson();
+            }
+            set {
+                MainTweet = value.ConvertJsonTo<ITweet>();
+            }
+        }
+
+        [BsonIgnore]
+        public ITweet MainTweet { get; set; }
+    }
 }
