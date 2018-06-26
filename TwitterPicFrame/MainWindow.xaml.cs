@@ -60,6 +60,7 @@ namespace TwitterPicFrame
             TwitterAuthenticated = LoginTwitter();
             MongoDBAuthenticated = LoginMongoDB();
 
+            Reset();
             StartStreaming();
         }
 
