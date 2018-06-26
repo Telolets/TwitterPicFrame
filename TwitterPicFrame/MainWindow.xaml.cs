@@ -38,11 +38,15 @@ namespace TwitterPicFrame
         IMongoDatabase database;
         IMongoCollection<TweetInfo> TweetCollection;
 
-        public BitmapImage _ImageFromTweet;
+        private BitmapImage _ImageFromTweet;
         public BitmapImage ImageFromTweet { get { return _ImageFromTweet; } set { _ImageFromTweet = value; OnPropertyChanged("ImageFromTweet"); } }
 
-        public String _TextURL;
+        private String _TextURL;
         public String TextURL { get { return _TextURL; } set { _TextURL = value; OnPropertyChanged("TextURL"); } }
+
+        private bool _IsShowImage;
+        public bool IsShowImage { get { return _IsShowImage; } set { _IsShowImage = value; OnPropertyChanged("IsShowImage"); } }
+
 
         Random random = new Random();
         Tweetinvi.Streaming.IFilteredStream Filteredstream = null;
@@ -57,6 +61,11 @@ namespace TwitterPicFrame
             MongoDBAuthenticated = LoginMongoDB();
 
             StartStreaming();
+        }
+
+        private void Reset()
+        {
+            IsShowImage = false;
         }
 
         private void Window_Closed(object sender, EventArgs e)
@@ -85,6 +94,8 @@ namespace TwitterPicFrame
 
         private bool LoginTwitter()
         {
+            //TODO Exception handling
+
             //Auth.SetApplicationOnlyCredentials(Settings.GetValueFromConfig("Twitter_CONSUMERKEY"), Settings.GetValueFromConfig("Twitter_CONSUMERSECRET"));
             Auth.SetUserCredentials(Settings.GetValueFromConfig("Twitter_CONSUMERKEY"), Settings.GetValueFromConfig("Twitter_CONSUMERSECRET"),
                 Settings.GetValueFromConfig("Twitter_ACCESSTOKEN"), Settings.GetValueFromConfig("Twitter_ACCESSTOKENSECRET"));
@@ -108,31 +119,7 @@ namespace TwitterPicFrame
             Filteredstream.MatchingTweetReceived += (sender2, args) =>
             {
                 ITweet tw = args.Tweet;
-
-                Console.WriteLine("A tweet containing has been found");
-
-                if (tw.RetweetedTweet != null)
-                {
-                    tw = tw.RetweetedTweet;
-                    Console.WriteLine("Extracting main Tweet rather than RT");
-                }
-
-                Console.WriteLine("The tweet is " + tw.FullText);
-
-                TextURL = tw.Url;
-
-                List<IMediaEntity> Medias = tw.Media;
-                if (Medias != null && Medias.Count > 0)
-                {
-                    Application.Current.Dispatcher.Invoke((Action)delegate
-                    {
-                        IMediaEntity m = Medias[random.Next(Medias.Count)];
-                        if (m.MediaURL.Contains(".jpg"))
-                            ImageFromTweet = new BitmapImage(new Uri(m.MediaURL));
-                    });
-
-                    SaveNewTweetToMongo(tw);
-                }
+                ProcessTweet(tw);
             };
 
             Filteredstream.StreamStarted += (sender2, args) =>
@@ -154,6 +141,36 @@ namespace TwitterPicFrame
             timer.Enabled = true;
 
             Task T = Filteredstream.StartStreamMatchingAnyConditionAsync();
+        }
+
+        private void ProcessTweet(ITweet tw)
+        {
+            Console.WriteLine("A tweet has been found");
+
+            if (tw.RetweetedTweet != null)
+            {
+                tw = tw.RetweetedTweet;
+                Console.WriteLine("Extracting main Tweet rather than RT");
+            }
+
+            Console.WriteLine("The tweet is " + tw.FullText);
+
+            List<IMediaEntity> Medias = tw.Media;
+            if (Medias != null && Medias.Count > 0)
+            {
+                Application.Current.Dispatcher.Invoke(delegate
+                {
+                    IMediaEntity m = Medias[random.Next(Medias.Count)];
+                    if (m.MediaURL.Contains(".jpg"))
+                    {
+                        TextURL = tw.Url;
+                        if(IsShowImage)
+                            ImageFromTweet = new BitmapImage(new Uri(m.MediaURL));
+                    }
+                });
+
+                SaveNewTweetToMongo(tw);
+            }
         }
 
         private void SaveNewTweetToMongo(ITweet tw)

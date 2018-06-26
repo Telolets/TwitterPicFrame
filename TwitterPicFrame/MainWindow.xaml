@@ -12,7 +12,14 @@
             <RowDefinition Height="*"/>
             <RowDefinition Height="20*"/>
         </Grid.RowDefinitions>
-        <TextBlock Grid.Row="0" Text="{Binding TextURL}" HorizontalAlignment="Left" VerticalAlignment="Center"></TextBlock>
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="15*"/>
+            </Grid.ColumnDefinitions>
+            <CheckBox IsChecked="{Binding IsShowImage}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <TextBox Grid.Column="1" Text="{Binding TextURL}" HorizontalAlignment="Left" VerticalAlignment="Center"></TextBox>
+        </Grid>
         <Image Grid.Row="1" Source="{Binding ImageFromTweet}" />
     </Grid>
 </Window>
