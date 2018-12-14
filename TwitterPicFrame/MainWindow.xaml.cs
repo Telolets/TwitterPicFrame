@@ -1,4 +1,6 @@
-﻿using MongoDB.Bson;
+﻿using Google.Apis.Auth.OAuth2;
+using Google.Cloud.Storage.V1;
+using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Bson.Serialization.IdGenerators;
 using MongoDB.Driver;
@@ -47,6 +49,7 @@ namespace TwitterPicFrame
         private bool _IsShowImage;
         public bool IsShowImage { get { return _IsShowImage; } set { _IsShowImage = value; OnPropertyChanged("IsShowImage"); } }
 
+        private string CurrentImageUrl = "";
 
         Random random = new Random();
         Tweetinvi.Streaming.IFilteredStream Filteredstream = null;
@@ -98,7 +101,8 @@ namespace TwitterPicFrame
             //TODO Exception handling
 
             //Auth.SetApplicationOnlyCredentials(Settings.GetValueFromConfig("Twitter_CONSUMERKEY"), Settings.GetValueFromConfig("Twitter_CONSUMERSECRET"));
-            Auth.SetUserCredentials(Settings.GetValueFromConfig("Twitter_CONSUMERKEY"), Settings.GetValueFromConfig("Twitter_CONSUMERSECRET"),
+            Auth.SetUserCredentials(
+                Settings.GetValueFromConfig("Twitter_CONSUMERKEY"), Settings.GetValueFromConfig("Twitter_CONSUMERSECRET"),
                 Settings.GetValueFromConfig("Twitter_ACCESSTOKEN"), Settings.GetValueFromConfig("Twitter_ACCESSTOKENSECRET"));
             return true;
         }
@@ -126,6 +130,9 @@ namespace TwitterPicFrame
             Filteredstream.StreamStarted += (sender2, args) =>
             {
                 Console.WriteLine("Stream started");
+
+                timer.Enabled = true;
+                Task.Factory.StartNew(() => { GCS_SaveInNewThread(); });
             };
 
             Filteredstream.StreamStopped += (sender2, args) =>
@@ -135,12 +142,20 @@ namespace TwitterPicFrame
 
                 timer.Stop();
                 timer.Enabled = false;
+
+                Console.WriteLine("Restarting in 5 Second");
+                Thread.Sleep(5000);
+                RestartStream();
             };
 
-            timer.Elapsed += new ElapsedEventHandler(OnTimedEvent);
+            timer.Elapsed += new ElapsedEventHandler(Timer_Elapsed);
             timer.Interval = 10000;
-            timer.Enabled = true;
 
+            RestartStream();
+        }
+
+        private void RestartStream()
+        {
             Task T = Filteredstream.StartStreamMatchingAnyConditionAsync();
         }
 
@@ -165,35 +180,22 @@ namespace TwitterPicFrame
                     if (m.MediaURL.Contains(".jpg"))
                     {
                         TextURL = tw.Url;
-                        if(IsShowImage)
-                            ImageFromTweet = new BitmapImage(new Uri(m.MediaURL));
+                        CurrentImageUrl = m.MediaURL;
+                        if (IsShowImage)
+                            ImageFromTweet = new BitmapImage(new Uri(CurrentImageUrl));
                     }
                 });
 
-                SaveNewTweetToMongo(tw);
+                if (!Mongo_isTweetSaved(tw.IdStr))
+                {
+                    Mongo_SaveNewTweet(tw);
+                    RecordQueue.Enqueue(tw);
+                    //GCS_SaveNewTweetImage(tw);
+                }
             }
         }
 
-        private void SaveNewTweetToMongo(ITweet tw)
-        {
-            if (!MongoDBAuthenticated)
-                return;
-
-            TweetCollection = database.GetCollection<TweetInfo>(Settings.GetValueFromConfig("MongoDB_Collection"));
-
-            if (!isTweetSaved(tw.IdStr))
-            {
-                TweetInfo ti = new TweetInfo();
-                ti.ID = tw.IdStr;
-                ti.Name = tw.CreatedBy.Name;
-                ti.ScreenName = tw.CreatedBy.ScreenName;
-                ti.MainTweet = tw;
-
-                TweetCollection.InsertOne(ti);
-            }
-        }
-
-        private bool isTweetSaved(String id)
+        private bool Mongo_isTweetSaved(String id)
         {
             IMongoCollection<BsonDocument> BsonCollection = database.GetCollection<BsonDocument>(Settings.GetValueFromConfig("MongoDB_Collection"));
             BsonDocument filter = new BsonDocument(new BsonElement("_id", id));
@@ -204,10 +206,103 @@ namespace TwitterPicFrame
                 return false;
         }
 
-        private void OnTimedEvent(object sender, ElapsedEventArgs e)
+        private void Mongo_SaveNewTweet(ITweet tw)
+        {
+            if (!MongoDBAuthenticated)
+                return;
+
+            TweetInfo ti = new TweetInfo();
+            ti.ID = tw.IdStr;
+            ti.Name = tw.CreatedBy.Name;
+            ti.ScreenName = tw.CreatedBy.ScreenName;
+            ti.MainTweet = tw;
+
+            TweetCollection = database.GetCollection<TweetInfo>(Settings.GetValueFromConfig("MongoDB_Collection"));
+            TweetCollection.InsertOne(ti);
+
+            Console.WriteLine("Tweet Saved into MongoDB");
+        }
+
+        Queue<ITweet> RecordQueue = new Queue<ITweet>();
+        StorageClient storageClient = null;
+
+        private void GCS_SaveInNewThread()
+        {
+            String ProjectId = Settings.GetValueFromConfig("GCS_projectId");
+            String BucketName = Settings.GetValueFromConfig("GCS_bucketName");
+            String BaseFolderName = Settings.GetValueFromConfig("GCS_baseFolderName");
+
+            if (storageClient == null)
+            {
+                string CredPath = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly().Location) + Settings.GetValueFromConfig("GCS_jsonKey");
+
+                var credential = GoogleCredential.FromFile(CredPath);
+                storageClient = StorageClient.Create(credential);
+            }
+
+            System.IO.Stream fs = new System.IO.MemoryStream(0);
+            String PathName = BaseFolderName += @"/";
+
+            var checkObj1 = storageClient.ListObjects(BucketName, PathName);
+            if (checkObj1.Count() <= 0)
+            {
+                var result = storageClient.UploadObject(BucketName, PathName, null, fs);
+                Console.WriteLine($"Image {result.Name} Uploaded to GCS");
+            }
+
+            while (true)
+            {
+                if (RecordQueue.Count == 0)
+                {
+                    Thread.Sleep(2000);
+                    continue;
+                }
+
+                ITweet tw = RecordQueue.Dequeue();
+
+                string TweetFolderName = tw.CreatedBy.ScreenName;
+
+                var ffs = new System.IO.MemoryStream(0);
+                String TweetPathName = PathName + TweetFolderName + @"/";
+                var checkObj2 = storageClient.ListObjects(BucketName, TweetPathName);
+                if (checkObj2.Count() <= 0)
+                {
+                    var result = storageClient.UploadObject(BucketName, TweetPathName, null, ffs);
+                    Console.WriteLine($"Image {result.Name} Uploaded to GCS");
+                }
+
+                foreach (IMediaEntity m in tw.Media)
+                {
+                    if (m.MediaURL.Contains(".jpg"))
+                    {
+                        String ImageName = m.IdStr + ".jpg";
+                        String finalFilePathName = TweetPathName + ImageName;
+                        //var ImageFromTweet = new BitmapImage(new Uri(m.MediaURL));
+
+                        System.Net.WebClient client = new System.Net.WebClient();
+                        fs = new System.IO.MemoryStream(client.DownloadData(m.MediaURL));
+                        //Console.WriteLine(PathNameUntili);
+
+                        var result = storageClient.UploadObject(BucketName, finalFilePathName, null, ffs);
+                        Console.WriteLine($"Image {result.Name} Uploaded to GCS");
+                    }
+                }
+            }
+        }
+
+        private void Timer_Elapsed(object sender, ElapsedEventArgs e)
         {
             if (Filteredstream != null)
                 Console.WriteLine(Filteredstream.StreamState);
+        }
+
+        //Show/hide the image from current tweet
+        private void CheckBox_Checked(object sender, RoutedEventArgs e)
+        {
+            if (IsShowImage)
+                ImageFromTweet = new BitmapImage(new Uri(CurrentImageUrl));
+            else
+                ImageFromTweet = null;
         }
 
         #region INotifyPropertyChanged
@@ -218,7 +313,7 @@ namespace TwitterPicFrame
         }
         #endregion
     }
-    
+
     [BsonIgnoreExtraElements]
     public class TweetInfo
     {
